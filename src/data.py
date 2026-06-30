@@ -1,26 +1,64 @@
+"""data.py — Synthetic employee data for AttritionIQ (Multiplier).
+
+Employee-level data with tenure (time-to-attrition), event indicator
+(1=left, 0=still employed), and HR covariates (salary, department,
+satisfaction, performance, commute). This mirrors real HR analytics data.
+
+The outcome is time-to-attrition (survival), NOT binary classification.
+"""
 from __future__ import annotations
-import numpy as np; import pandas as pd
-FEATURE_NAMES = ["satisfaction_level","last_evaluation_score","number_projects","avg_monthly_hours","tenure_years","work_accident","promotion_last_5yrs","salary_level","overtime_flag"]
-CATEGORICAL_FEATURES = ["salary_level"]
-NUMERICAL_FEATURES = ["satisfaction_level","last_evaluation_score","number_projects","avg_monthly_hours","tenure_years","work_accident","promotion_last_5yrs","overtime_flag"]
-TARGET_NAME = "attrition"
-def make_synthetic(n=10000,seed=42):
-    rng=np.random.default_rng(seed)
-    df=pd.DataFrame({
-        "satisfaction_level": rng.uniform(0.1,1.0,size=n).round(3),
-        "last_evaluation_score": rng.uniform(0.3,1.0,size=n).round(3),
-        "number_projects": rng.poisson(lam=4,size=n).clip(1,9),
-        "avg_monthly_hours": rng.normal(loc=180,scale=45,size=n).clip(60,320).astype(int),
-        "tenure_years": rng.exponential(scale=4,size=n).clip(0,25).round(1),
-        "work_accident": rng.choice([0,1],size=n,p=[0.85,0.15]),
-        "promotion_last_5yrs": rng.choice([0,1],size=n,p=[0.88,0.12]),
-        "salary_level": rng.choice(["low","medium","high"],size=n,p=[0.40,0.35,0.25]),
-        "overtime_flag": rng.choice([0,1],size=n,p=[0.70,0.30]),
+import numpy as np
+import pandas as pd
+from typing import Any
+
+
+def make_synthetic(n: int = 1000, seed: int = 42) -> dict[str, Any]:
+    """Generate synthetic employee data with tenure-based survival outcomes.
+
+    Low satisfaction, long commute, and low salary increase attrition hazard.
+    High performers have slightly higher hazard (external opportunities).
+    """
+    rng = np.random.default_rng(seed)
+
+    salary = rng.lognormal(10.5, 0.3, n).clip(30000, 200000).astype(int)
+    department = rng.choice(["engineering", "sales", "marketing", "ops", "hr"], n,
+                            p=[0.30, 0.25, 0.15, 0.20, 0.10])
+    satisfaction = rng.beta(5, 3, n).round(3)
+    performance = rng.beta(6, 3, n).round(3)
+    commute_mins = rng.exponential(30, n).clip(5, 120).astype(int)
+    age = rng.integers(22, 60, n)
+
+    log_hazard = (
+        -5.5
+        - 0.5 * np.log(salary / 50000)
+        + 0.3 * (1 - satisfaction)
+        + 0.5 * performance  # high performers leave more
+        + 0.01 * commute_mins
+        - 0.02 * age
+        + rng.normal(0, 0.3, n)
+    )
+    hazard = np.exp(log_hazard)
+    tenure = rng.exponential(1.0 / hazard).clip(1, 365 * 10)
+
+    # Right censoring (employees still employed)
+    max_tenure = tenure.max() * 0.7
+    censor_time = rng.uniform(0, max_tenure, n)
+    observed_tenure = np.minimum(tenure, censor_time)
+    event = (tenure <= censor_time).astype(int)
+
+    df = pd.DataFrame({
+        "salary": salary, "department": department, "satisfaction": satisfaction,
+        "performance": performance, "commute_mins": commute_mins, "age": age,
+        "tenure_days": observed_tenure.round(0), "attrition": event,
     })
-    sat=df["satisfaction_level"]; eval_s=df["last_evaluation_score"]/10; proj=df["number_projects"]/10
-    hrs=np.clip(df["avg_monthly_hours"]/320,0,1); ten=np.clip(df["tenure_years"]/10,0,1)
-    acc=df["work_accident"]; prom=df["promotion_last_5yrs"]; salary=df["salary_level"].map({"low":1,"medium":0.5,"high":0})
-    over=df["overtime_flag"]
-    log_odds = -1.0 - 2.0*sat + 0.5*eval_s + 0.3*proj + 0.4*hrs + 0.3*ten + 0.4*acc - 0.3*prom + 0.3*salary + 0.5*over + rng.normal(0,0.5,size=n)
-    prob=1/(1+np.exp(-log_odds)); y=(prob>np.percentile(prob,85)).astype(np.float64)
-    return {"X":df,"y":y,"features":FEATURE_NAMES,"df":df.assign(attrition=y),"categorical_features":CATEGORICAL_FEATURES,"numerical_features":NUMERICAL_FEATURES,"n_samples":n,"n_features":len(FEATURE_NAMES),"positive_rate":y.mean()}
+
+    return {
+        "df": df,
+        "features": ["salary", "satisfaction", "performance", "commute_mins", "age"],
+        "categorical_features": ["department"],
+        "numerical_features": ["salary", "satisfaction", "performance", "commute_mins", "age"],
+        "time_col": "tenure_days",
+        "event_col": "attrition",
+        "n_samples": n,
+        "attrition_rate": float(event.mean()),
+    }
