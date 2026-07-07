@@ -2,52 +2,51 @@
 
 Predicts which employees are likely to leave, and weighs what an intervention is worth against what it costs.
 
-Trains four classifiers (Logistic Regression, Random Forest, Gradient Boosting, XGBoost) on synthetic HR data engineered to mirror IBM HR Analytics dataset patterns. The dashboard provides department-level attrition breakdowns, threshold tuning, and cost-benefit analysis for retention interventions.
+Runs on the real **IBM HR Analytics attrition dataset** (1,470 employees, 16.1% attrition), downloaded automatically on first run and cached under `data/`. If the download isn't possible, both the app and the trainer fall back to a synthetic generator with the same schema.
 
-## Setup
+There are two models here, on purpose:
+
+- **The dashboard** (`app.py`) fits a class-weighted logistic regression written in plain NumPy (SGD, no sklearn) — because everything downstream of the score needs a probability: threshold tuning, cost curves, intervention ROI.
+- **The CLI trainer** (`train.py`) fits a Cox proportional-hazards model, treating attrition as a *time-to-event* problem: tenure is the clock, employees still on payroll are right-censored. This answers "who leaves soonest," not just "who leaves."
+
+## Results on the IBM data
+
+Logistic regression, 80/20 holdout, threshold 0.5:
+
+| AUC-ROC | PR-AUC | F1 | Precision | Recall |
+|---|---|---|---|---|
+| 0.847 | 0.672 | 0.55 | 0.41 | 0.82 |
+
+Recall is deliberately favoured (class weighting): missing a leaver costs a multiple of salary, while a false alarm costs one retention conversation. The threshold slider in the app lets you move along that trade-off and see the cost impact directly.
+
+Cox model: concordance index **0.782**. The hazard ratios are the interesting part — each additional point of job satisfaction (1–4 scale) cuts the attrition hazard by ~20%, distance from home increases it ~2% per km, and income and age are both protective.
+
+## Run it
 
 ```bash
 pip install -r requirements.txt
-python train.py
+python train.py              # Cox model on the IBM data (downloads once)
+python train.py --synthetic  # offline pipeline check
 pytest -q
 streamlit run app.py
 ```
 
-## Results and what the dashboard does with them
+## What's in the dashboard
 
-Best model (Logistic Regression) holdout results:
-
-| Metric | Value |
-|---|---|
-| ROC AUC | 0.872 |
-| Gini | 0.744 |
-| KS Statistic | 0.664 |
-| F1 Score | 0.500 |
-| Accuracy | 0.776 |
-
-5-fold CV AUC: 0.873 ± 0.051, with all four models compared side by side (full ROC/calibration curves in the Model Lab tab). The rest of the app is built around turning those scores into decisions:
-
-| Component | What it does |
-|---|---|
-| **Controls** | Classification threshold, cost multiplier, department filter, intervention effectiveness |
-| **Data Explorer** | Attrition distribution, feature correlations, department-level breakdowns |
-| **Model Lab** | Multi-model comparison, ROC/PR curves, calibration, confusion matrix |
-| **Cost-Benefit** | Intervention ROI calculator based on salary, turnover cost, and effectiveness rate |
-| **Attrition Drivers** | Feature importance, partial dependence plots for top risk factors |
-
-## The dataset
-
-Synthetic HR dataset matching IBM HR Analytics patterns: department, job level, overtime, satisfaction scores, tenure, income, and travel frequency features.
+- **Data Explorer** — attrition split, feature correlations, department breakdowns
+- **Model Lab** — ROC/PR curves, calibration, confusion matrix, all computed by hand (no sklearn)
+- **Cost-Benefit** — ROI calculator: threshold × salary multiple × intervention effectiveness
+- **Attrition Drivers** — coefficients and partial-dependence views of the top risk factors
 
 ## Layout
 
 ```
-AttritionIQ/
-  src/         data, model, evaluate, persist modules
-  train.py     training pipeline (multi-model + CV)
-  app.py       Streamlit dashboard
-  tests/       pytest smoke test
-  models/      saved model + metrics (gitignored)
+src/         data loading (IBM HR + synthetic fallback), Cox model, metrics
+train.py     Cox survival trainer
+app.py       Streamlit dashboard (self-contained logistic model)
+tests/       smoke tests
+data/        cached IBM HR csv (created on first run)
+models/      saved model + metrics (gitignored)
 ```
 
 MIT licensed.

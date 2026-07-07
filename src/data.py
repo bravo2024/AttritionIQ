@@ -62,3 +62,46 @@ def make_synthetic(n: int = 1000, seed: int = 42) -> dict[str, Any]:
         "n_samples": n,
         "attrition_rate": float(event.mean()),
     }
+
+IBM_HR_URL = "https://raw.githubusercontent.com/IBM/employee-attrition-aif360/master/data/emp_attrition.csv"
+
+
+def load_ibm_hr(cache_dir: str | None = None) -> dict[str, Any]:
+    """The IBM HR Analytics dataset (1,470 employees), mapped to the survival schema.
+
+    Tenure is YearsAtCompany in days (coarse — the dataset only reports whole
+    years), and everyone still employed at survey time is right-censored.
+    """
+    from pathlib import Path
+
+    cache = Path(cache_dir or Path(__file__).parent.parent / "data") / "ibm_hr_attrition.csv"
+    if cache.exists():
+        raw = pd.read_csv(cache)
+    else:
+        raw = pd.read_csv(IBM_HR_URL)
+        cache.parent.mkdir(exist_ok=True)
+        raw.to_csv(cache, index=False)
+
+    event = raw["Attrition"].eq("Yes").astype(int)
+    df = pd.DataFrame({
+        "monthly_income": raw["MonthlyIncome"],
+        "department": raw["Department"],
+        "job_satisfaction": raw["JobSatisfaction"],
+        "performance_rating": raw["PerformanceRating"],
+        "distance_from_home": raw["DistanceFromHome"],
+        "age": raw["Age"],
+        "tenure_days": (raw["YearsAtCompany"] * 365).clip(lower=1),
+        "attrition": event,
+    })
+    feats = ["monthly_income", "job_satisfaction", "performance_rating",
+             "distance_from_home", "age"]
+    return {
+        "df": df,
+        "features": feats,
+        "categorical_features": ["department"],
+        "numerical_features": feats,
+        "time_col": "tenure_days",
+        "event_col": "attrition",
+        "n_samples": len(df),
+        "attrition_rate": float(event.mean()),
+    }

@@ -57,9 +57,53 @@ with st.sidebar:
     st.caption("AttritionIQ | IBM HR Analytics | v2.0")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DATA GENERATION
+# DATA
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner="Generating synthetic IBM HR dataset…")
+IBM_HR_URL = "https://raw.githubusercontent.com/IBM/employee-attrition-aif360/master/data/emp_attrition.csv"
+
+
+@st.cache_data(show_spinner="Loading IBM HR attrition data…")
+def load_ibm_hr() -> pd.DataFrame:
+    """The real IBM HR Analytics attrition dataset (1,470 employees).
+
+    Cached to data/ after the first download. Column names are mapped to
+    the snake_case schema the rest of the app expects.
+    """
+    from pathlib import Path
+
+    cache = Path(__file__).parent / "data" / "ibm_hr_attrition.csv"
+    if cache.exists():
+        raw = pd.read_csv(cache)
+    else:
+        raw = pd.read_csv(IBM_HR_URL)
+        cache.parent.mkdir(exist_ok=True)
+        raw.to_csv(cache, index=False)
+
+    df = pd.DataFrame({
+        "emp_id": raw["EmployeeNumber"].map("EMP{:05d}".format),
+        "age": raw["Age"],
+        "department": raw["Department"].map(
+            {"Research & Development": "R&D", "Human Resources": "HR", "Sales": "Sales"}),
+        "job_level": raw["JobLevel"],
+        "years_at_company": raw["YearsAtCompany"],
+        "years_with_manager": raw["YearsWithCurrManager"],
+        "monthly_income": raw["MonthlyIncome"],
+        "percent_salary_hike": raw["PercentSalaryHike"],
+        "job_satisfaction": raw["JobSatisfaction"],
+        "environment_satisfaction": raw["EnvironmentSatisfaction"],
+        "work_life_balance": raw["WorkLifeBalance"],
+        "overtime": raw["OverTime"].eq("Yes"),
+        "business_travel": raw["BusinessTravel"],
+        "distance_from_home": raw["DistanceFromHome"],
+        "num_companies_worked": raw["NumCompaniesWorked"],
+        "training_times_last_year": raw["TrainingTimesLastYear"],
+        "stock_option_level": raw["StockOptionLevel"],
+        "attrition": raw["Attrition"].eq("Yes"),
+    })
+    return df
+
+
+@st.cache_data(show_spinner="Generating synthetic HR dataset…")
 def make_dataset(n: int = 5000, seed: int = 42) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
 
@@ -173,9 +217,19 @@ def _standardize(X_train, X_test):
     return (X_train - mu) / sigma, (X_test - mu) / sigma, mu, sigma
 
 
+@st.cache_data(show_spinner="Loading data…")
+def get_data() -> pd.DataFrame:
+    """Real IBM data when reachable, synthetic fallback offline."""
+    try:
+        return load_ibm_hr()
+    except Exception:
+        st.sidebar.warning("Could not fetch the IBM HR dataset — using synthetic data.")
+        return make_dataset(5000)
+
+
 @st.cache_resource(show_spinner="Training logistic regression…")
-def train_model(n_samples: int = 5000):
-    df = make_dataset(n_samples)
+def train_model():
+    df = get_data()
     rng = np.random.default_rng(0)
 
     X_raw, col_names = _encode(df)
@@ -347,8 +401,8 @@ TIER_COLORS = {
 # ─────────────────────────────────────────────────────────────────────────────
 # LOAD DATA & MODEL
 # ─────────────────────────────────────────────────────────────────────────────
-df_full = make_dataset(5000)
-model = train_model(5000)
+df_full = get_data()
+model = train_model()
 
 # Score all employees
 X_all_raw, _ = _encode(df_full)
